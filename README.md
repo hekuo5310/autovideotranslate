@@ -2,107 +2,108 @@
 
 AI 辅助视频翻译、字幕与配音流水线。
 
-## 存储：OneDrive OAuth
+## 架构
 
-媒体文件统一存 OneDrive，不使用 R2。后台直接提供“连接 OneDrive”按钮，采用 Microsoft OAuth 2.0 Authorization Code + PKCE：
+- **Cloudflare Worker**：API、R2 Multipart Upload、内部媒体网关
+- **Durable Object `ProjectJob`**：每个项目一个状态机，管理 Container 生命周期和任务状态
+- **Cloudflare Container**：Debian + FFmpeg/ffprobe
+- **R2**：原视频、字幕、TTS 音频、中间文件和最终成片
+- **D1**：项目、字幕片段、术语和审核记录
+- **Queues**：媒体分析、渲染以及后续 AI/TTS 异步任务
+- **Gemini**：视频理解、识别、翻译和 QA
+- **MiMo V2.5 TTS**：中文配音
 
-```text
-设置 → 连接 OneDrive
-  → Microsoft 登录/授权
-  → /api/auth/onedrive/callback
-  → code + PKCE verifier 换 token
-  → refresh token AES-GCM 加密写入 D1
-  → /me/drive 自动取得 driveId
-```
-
-不再需要手工填写 refresh token 或 driveId。
-
-### Microsoft Entra 应用
-
-添加 Web 重定向 URI：
+## 数据流
 
 ```text
-https://你的域名/api/auth/onedrive/callback
+Browser
+  │ multipart chunks
+  ▼
+Worker
+  │ R2 binding
+  ▼
+R2
+  │
+  │ authenticated internal media stream
+  ▼
+Project DO → FFmpeg Container
+                 │
+                 ▼
+               Worker
+                 │
+                 ▼
+                 R2
 ```
 
-Delegated permissions：
+Container 不持有 R2/S3 密钥。它只通过 Worker 的内部媒体接口读写，接口由 `INTERNAL_MEDIA_TOKEN` 保护。
 
-```text
-Files.ReadWrite
-User.Read
-offline_access
+## 首次部署
+
+```bash
+npm install
+npx wrangler d1 create autovideotranslate
+npx wrangler r2 bucket create autovideotranslate-media
+npx wrangler queues create autovideotranslate-pipeline
 ```
 
-支持个人 Microsoft Account + 工作/学校账号时，把应用账户类型配置为相应的多租户/个人账号选项，并保持：
+把 D1 返回的 database ID 写入 `wrangler.jsonc`。
+
+设置：
 
 ```json
-"ONEDRIVE_TENANT_ID": "common"
-```
-
-### Wrangler 配置
-
-```json
-"APP_ORIGIN": "https://你的域名",
-"ONEDRIVE_TENANT_ID": "common",
-"ONEDRIVE_CLIENT_ID": "你的应用 Client ID",
-"ONEDRIVE_ROOT_PATH": "AutoVideoTranslate"
+"APP_ORIGIN": "https://你的 Worker 或自定义域名"
 ```
 
 Secrets：
 
 ```bash
-npx wrangler secret put ONEDRIVE_CLIENT_SECRET
-npx wrangler secret put TOKEN_ENCRYPTION_KEY
 npx wrangler secret put GEMINI_API_KEY
 npx wrangler secret put MIMO_API_KEY
+npx wrangler secret put INTERNAL_MEDIA_TOKEN
 ```
 
-`TOKEN_ENCRYPTION_KEY` 使用随机高熵字符串。refresh token 只以 AES-GCM 密文写入 D1。
+`INTERNAL_MEDIA_TOKEN` 建议使用随机高熵字符串。
 
-## Cloudflare 资源
+初始化数据库并部署：
 
 ```bash
-npm install
-npx wrangler d1 create autovideotranslate
-npx wrangler queues create autovideotranslate-pipeline
 npx wrangler d1 migrations apply autovideotranslate --remote
 npm run deploy
 ```
 
-## OneDrive 文件流
+## R2 文件布局
 
 ```text
-Browser
-  │ POST /uploads/init
-  ▼
-Worker → Graph createUploadSession
-  │
-  └── uploadUrl → Browser → OneDrive
-
-OneDrive → temporary downloadUrl → FFmpeg Container
-FFmpeg Container → OneDrive upload session → final.mp4
+projects/
+└── {projectId}/
+    ├── source/
+    │   └── original.mp4
+    ├── proxy/
+    ├── audio/
+    ├── tts/
+    ├── subtitle/
+    └── output/
+        └── final.mp4
 ```
 
-## 文件布局
-
-```text
-AutoVideoTranslate/
-└── projects/
-    └── {projectId}/
-        ├── source/
-        ├── proxy/
-        ├── audio/
-        ├── tts/
-        ├── subtitle/
-        └── output/final.mp4
-```
+D1 的 `source_key` / `output_key` 保存 R2 object key。
 
 ## Pipeline
 
 ```text
-上传 → ffprobe → Gemini 转录/理解 → 翻译 → AI QA
-→ 人工字幕终审 → MiMo TTS → TTS QA
-→ 人工配音终审 → FFmpeg Render → OneDrive → 成片终审
+上传 R2
+  → ffprobe
+  → Gemini 视频理解/转录
+  → Gemini 上下文与术语
+  → Gemini 初译
+  → AI QA
+  → 人工字幕终审
+  → MiMo TTS
+  → TTS QA
+  → 人工配音终审
+  → FFmpeg Container 渲染
+  → R2
+  → 成片终审
 ```
 
 ## License
