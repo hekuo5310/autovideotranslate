@@ -16,12 +16,7 @@ button{background:#111;color:#fff;cursor:pointer}input{background:#fff;color:#11
 <main>
 <div class="eyebrow">AI assisted localization pipeline</div>
 <h1>AutoVideoTranslate</h1>
-<p>Gemini + MiMo TTS + Cloudflare Containers/FFmpeg + OneDrive。</p>
-<section class="panel">
-<h2>OneDrive</h2>
-<p id="od">检查连接状态…</p>
-<button id="connect">连接 OneDrive</button>
-</section>
+<p>Gemini + MiMo TTS + Cloudflare Durable Objects/Containers + FFmpeg + R2。</p>
 <section class="panel">
 <h2>项目 API smoke test</h2>
 <input id="title" value="测试视频" />
@@ -30,11 +25,16 @@ button{background:#111;color:#fff;cursor:pointer}input{background:#fff;color:#11
 </section>
 </main>
 <script>
-const od=document.querySelector("#od");
-async function refresh(){const r=await fetch("/api/auth/onedrive/status");const x=await r.json();od.textContent=x.connected?("已连接："+(x.account_name||x.drive_id)):"尚未连接";}
-document.querySelector("#connect").onclick=()=>location.href="/api/auth/onedrive/start";
-document.querySelector("#create").onclick=async()=>{const result=document.querySelector("#result");result.textContent="创建中…";const r=await fetch("/api/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title:document.querySelector("#title").value})});result.textContent=JSON.stringify(await r.json(),null,2)};
-refresh();
+document.querySelector("#create").onclick=async()=>{
+  const result=document.querySelector("#result");
+  result.textContent="创建中…";
+  const r=await fetch("/api/projects",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({title:document.querySelector("#title").value})
+  });
+  result.textContent=JSON.stringify(await r.json(),null,2);
+};
 </script>
 </body>
 </html>

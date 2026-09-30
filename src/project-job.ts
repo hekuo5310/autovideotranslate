@@ -1,10 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env, ProjectRuntimeState } from "./types";
-import {
-  createUploadSession,
-  getDownloadUrl,
-  projectPath,
-} from "./storage/onedrive";
 
 const STATE_KEY = "runtime";
 const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
@@ -44,6 +39,12 @@ export class ProjectJob extends DurableObject<Env> {
     };
     await this.ctx.storage.put(STATE_KEY, next);
     return next;
+  }
+
+  private mediaUrl(key: string): string {
+    const url = new URL("/api/internal/media", this.env.APP_ORIGIN);
+    url.searchParams.set("key", key);
+    return url.toString();
   }
 
   private async ensureContainer(): Promise<any> {
@@ -89,17 +90,16 @@ export class ProjectJob extends DurableObject<Env> {
 
     try {
       const port = await this.ensureContainer();
-      const sourceUrl = await getDownloadUrl(this.env, sourceKey);
-
       const response = await port.fetch("http://container/probe", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source_url: sourceUrl }),
+        body: JSON.stringify({
+          source_url: this.mediaUrl(sourceKey),
+          token: this.env.INTERNAL_MEDIA_TOKEN,
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Probe failed: ${await response.text()}`);
-      }
+      if (!response.ok) throw new Error(`Probe failed: ${await response.text()}`);
 
       const metadata = (await response.json()) as Record<string, unknown>;
       await this.env.DB.prepare(
@@ -141,48 +141,25 @@ export class ProjectJob extends DurableObject<Env> {
 
     try {
       const port = await this.ensureContainer();
-
-      const [sourceUrl, subtitleUrl, dubAudioUrl] = await Promise.all([
-        getDownloadUrl(this.env, input.sourceKey),
-        input.subtitleKey ? getDownloadUrl(this.env, input.subtitleKey) : Promise.resolve(undefined),
-        input.dubAudioKey ? getDownloadUrl(this.env, input.dubAudioKey) : Promise.resolve(undefined),
-      ]);
-
-      const outputPath = input.outputKey.startsWith("/")
-        ? input.outputKey.slice(1)
-        : input.outputKey;
-      const session = await createUploadSession(this.env, outputPath, "replace");
-
       const response = await port.fetch("http://container/render", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          source_url: sourceUrl,
-          subtitle_url: subtitleUrl,
-          dub_audio_url: dubAudioUrl,
-          output_upload_url: session.uploadUrl,
+          source_url: this.mediaUrl(input.sourceKey),
+          output_url: this.mediaUrl(input.outputKey),
+          subtitle_url: input.subtitleKey ? this.mediaUrl(input.subtitleKey) : undefined,
+          dub_audio_url: input.dubAudioKey ? this.mediaUrl(input.dubAudioKey) : undefined,
+          token: this.env.INTERNAL_MEDIA_TOKEN,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Render failed: ${await response.text()}`);
-      }
+      if (!response.ok) throw new Error(`Render failed: ${await response.text()}`);
 
-      const result = (await response.json()) as {
-        ok: boolean;
-        bytes: number;
-        item?: { id?: string; name?: string };
-      };
-
-      const outputItemId = result.item?.id;
-      if (!outputItemId) {
-        throw new Error("OneDrive upload completed without a driveItem id");
-      }
-
+      const result = await response.json();
       const state = await this.writeState({
         stage: "WAITING_FINAL_REVIEW",
         progress: 100,
-        outputKey: outputItemId,
+        outputKey: input.outputKey,
         metadata: {
           ...(await this.readState())?.metadata,
           render: result,
@@ -192,7 +169,7 @@ export class ProjectJob extends DurableObject<Env> {
       await this.env.DB.prepare(
         "UPDATE projects SET stage = ?, output_key = ?, updated_at = ? WHERE id = ?",
       )
-        .bind("WAITING_FINAL_REVIEW", outputItemId, Date.now(), state.projectId)
+        .bind("WAITING_FINAL_REVIEW", input.outputKey, Date.now(), state.projectId)
         .run();
 
       return json(state);
