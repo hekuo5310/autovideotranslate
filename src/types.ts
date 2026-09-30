@@ -30,11 +30,17 @@ export interface ProjectRuntimeState {
 
 export type PipelineMessage =
   | { type: "probe"; projectId: string; sourceKey: string }
-  | { type: "render"; projectId: string; sourceKey: string; outputKey: string; subtitleKey?: string; dubAudioKey?: string };
+  | {
+      type: "render";
+      projectId: string;
+      sourceKey: string;
+      outputKey: string;
+      subtitleKey?: string;
+      dubAudioKey?: string;
+    };
 
 export interface Env {
   DB: D1Database;
-  MEDIA: R2Bucket;
   PIPELINE_QUEUE: Queue<PipelineMessage>;
   PROJECT_JOBS: DurableObjectNamespace;
   ASSETS: Fetcher;
@@ -46,6 +52,11 @@ export interface Env {
   MIMO_BASE_URL: string;
   MIMO_TTS_MODEL: string;
 
-  INTERNAL_MEDIA_TOKEN: string;
-  APP_ORIGIN: string;
+  ONEDRIVE_AUTH_MODE: "client_credentials" | "refresh_token";
+  ONEDRIVE_TENANT_ID: string;
+  ONEDRIVE_CLIENT_ID: string;
+  ONEDRIVE_CLIENT_SECRET?: string;
+  ONEDRIVE_REFRESH_TOKEN?: string;
+  ONEDRIVE_DRIVE_ID: string;
+  ONEDRIVE_ROOT_PATH: string;
 }

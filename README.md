@@ -4,31 +4,95 @@ AI 辅助的视频翻译、字幕与配音流水线。
 
 ## 当前架构
 
-- **Cloudflare Worker**：HTTP API、上传控制、内部媒体网关
+- **Cloudflare Worker**：HTTP API、OneDrive Upload Session、权限与任务入口
 - **Durable Object `ProjectJob`**：一个项目一个状态机，负责 Container 生命周期、任务重试与运行状态
 - **Cloudflare Container**：Debian + FFmpeg/ffprobe，负责媒体分析、字幕烧录、配音混音和最终编码
-- **R2**：原视频、字幕、TTS 音频与成片
+- **OneDrive / Microsoft Graph**：原视频、字幕、TTS 音频与成片的唯一媒体存储
 - **D1**：项目、字幕片段、术语表和人工审核记录
 - **Queues**：probe/render 及后续 Gemini/MiMo 异步任务
-- **Gemini 3.8 Flash**：计划用于视频理解、识别、翻译与 QA
-- **MiMo V2.5 TTS**：用于角色中文配音
+- **Gemini**：视频理解、识别、翻译与 QA
+- **MiMo V2.5 TTS**：角色中文配音
 
-## 第一阶段已实现
+## OneDrive 数据流
 
-- 项目创建与 D1 持久化
-- R2 Multipart Upload API
-- 上传完成后自动排队
-- 一个项目对应一个 Durable Object
-- DO 按需启动 FFmpeg Container
-- ffprobe 媒体元信息分析
-- FFmpeg 最终渲染
-- R2 内部媒体流接口
-- Gemini JSON 适配器
-- MiMo TTS 官方 OpenAI-compatible API 适配器
-- 最小 Web UI
-- GitHub Actions TypeScript typecheck
+浏览器不会把大视频先上传到 Worker：
 
-## 本地/首次部署
+```text
+Browser
+  │
+  │ POST /uploads/init
+  ▼
+Worker ───── Microsoft Graph
+  │              │
+  │              └─ createUploadSession
+  │
+  └──── uploadUrl ─────→ Browser
+                           │
+                           │ PUT byte ranges
+                           ▼
+                        OneDrive
+```
+
+OneDrive Upload Session 返回的是预认证上传 URL，浏览器直接把分片 PUT 到该 URL。最后一个分片成功后 OneDrive 返回 `driveItem`，前端再把 `itemId` 提交给 `/uploads/complete`。
+
+转码时：
+
+```text
+OneDrive
+   │ 临时预认证 downloadUrl
+   ▼
+FFmpeg Container
+   │
+   │ createUploadSession
+   ▼
+OneDrive output/final.mp4
+```
+
+因此视频本体不经过 Worker，也不再需要 R2。
+
+## OneDrive 鉴权
+
+支持两种模式。
+
+### 1. Microsoft 365 / OneDrive for Business（推荐）
+
+使用应用权限 client credentials：
+
+```json
+"ONEDRIVE_AUTH_MODE": "client_credentials",
+"ONEDRIVE_TENANT_ID": "...",
+"ONEDRIVE_CLIENT_ID": "...",
+"ONEDRIVE_DRIVE_ID": "..."
+```
+
+然后：
+
+```bash
+npx wrangler secret put ONEDRIVE_CLIENT_SECRET
+```
+
+Azure / Entra 应用需要为 Microsoft Graph 配置对应的文件读写应用权限，并完成管理员同意。
+
+### 2. 个人 OneDrive / delegated
+
+```json
+"ONEDRIVE_AUTH_MODE": "refresh_token",
+"ONEDRIVE_TENANT_ID": "consumers",
+"ONEDRIVE_CLIENT_ID": "...",
+"ONEDRIVE_DRIVE_ID": "..."
+```
+
+Secrets：
+
+```bash
+npx wrangler secret put ONEDRIVE_REFRESH_TOKEN
+# 如果你的应用类型需要 secret：
+npx wrangler secret put ONEDRIVE_CLIENT_SECRET
+```
+
+refresh token 必须带有 OneDrive 文件读写授权。生产环境后续建议把 OAuth 授权流程做进后台，不长期手工维护 refresh token。
+
+## 首次部署
 
 1. 安装依赖
 
@@ -36,35 +100,46 @@ AI 辅助的视频翻译、字幕与配音流水线。
 npm install
 ```
 
-2. 创建资源
+2. 创建 Cloudflare 资源
 
 ```bash
 npx wrangler d1 create autovideotranslate
-npx wrangler r2 bucket create autovideotranslate-media
 npx wrangler queues create autovideotranslate-pipeline
 ```
 
-把 D1 返回的 ID 写入 `wrangler.jsonc`。
+不再创建 R2 Bucket。
 
-3. 设置 secrets
+3. 修改 `wrangler.jsonc`
+
+填写：
+
+- D1 database ID
+- `ONEDRIVE_TENANT_ID`
+- `ONEDRIVE_CLIENT_ID`
+- `ONEDRIVE_DRIVE_ID`
+- `ONEDRIVE_ROOT_PATH`
+
+默认根目录：
+
+```text
+AutoVideoTranslate/
+```
+
+程序会自动创建项目需要的子目录。
+
+4. 设置 secrets
 
 ```bash
 npx wrangler secret put GEMINI_API_KEY
 npx wrangler secret put MIMO_API_KEY
-npx wrangler secret put INTERNAL_MEDIA_TOKEN
+npx wrangler secret put ONEDRIVE_CLIENT_SECRET
 ```
 
-`INTERNAL_MEDIA_TOKEN` 使用随机长字符串。
+如果使用 refresh token 模式：
 
-4. 修改 `APP_ORIGIN`
-
-把 `wrangler.jsonc` 中的：
-
-```text
-https://REPLACE_WITH_YOUR_DOMAIN
+```bash
+npx wrangler secret put ONEDRIVE_REFRESH_TOKEN
 ```
-
-替换为生产 Worker/自定义域名。Container 会通过该地址流式访问 R2 内部媒体接口。
 
 5. 初始化 D1
 
@@ -78,31 +153,28 @@ npx wrangler d1 migrations apply autovideotranslate --remote
 npm run deploy
 ```
 
-## 目录
+## OneDrive 文件布局
 
 ```text
-src/
-  index.ts          Worker API / Queue consumer
-  project-job.ts    Durable Object + Container orchestration
-  ai/
-    gemini.ts
-    mimo.ts
-
-container/
-  Dockerfile
-  server.py
-
-migrations/
-  0001_init.sql
-
-public/
-  index.html
+AutoVideoTranslate/
+└── projects/
+    └── {projectId}/
+        ├── source/
+        │   └── original.mp4
+        ├── proxy/
+        ├── audio/
+        ├── tts/
+        ├── subtitle/
+        └── output/
+            └── final.mp4
 ```
 
-## Pipeline 目标
+D1 中现有的 `source_key` / `output_key` 字段继续保留，但语义已经改成 **OneDrive driveItem ID**，不是 R2 object key。
+
+## Pipeline
 
 ```text
-上传
+上传到 OneDrive
   → ffprobe
   → Gemini 视频理解/转录
   → Gemini 上下文与术语
@@ -113,20 +185,9 @@ public/
   → TTS 时长 QA
   → 人工配音终审
   → FFmpeg Container 渲染
+  → 上传 OneDrive
   → 人工成片终审
 ```
-
-## 下一步
-
-当前 commit 先建立稳定的媒体与任务底座。下一步应继续实现：
-
-1. Gemini Files API / Cloud Storage 视频上传与时间轴结构化转录
-2. `segments` 字幕编辑 API
-3. Gemini 翻译 + QA + glossary/translation memory
-4. MiMo 按 segment 批量 TTS、时长检测、自动重试
-5. ASS 生成器
-6. 人工字幕/配音审核工作台
-7. WebSocket 实时转码进度
 
 ## License
 

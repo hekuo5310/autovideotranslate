@@ -1,4 +1,10 @@
 import type { Env, PipelineMessage } from "./types";
+import {
+  assertProjectItem,
+  createUploadSession,
+  projectPath,
+} from "./storage/onedrive";
+
 export { ProjectJob } from "./project-job";
 
 function json(data: unknown, status = 200): Response {
@@ -6,8 +12,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function objectName(filename: string): string {
-  const clean = filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(-180) || "source.bin";
-  return clean;
+  return filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(-180) || "source.bin";
 }
 
 function projectStub(env: Env, projectId: string): DurableObjectStub {
@@ -52,58 +57,60 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
   const initUpload = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/init$/);
   if (request.method === "POST" && initUpload) {
     const projectId = decodeURIComponent(initUpload[1]);
-    const body = (await request.json()) as { filename: string; contentType?: string };
-    const key = `projects/${projectId}/source/${objectName(body.filename)}`;
+    const body = (await request.json()) as {
+      filename: string;
+      contentType?: string;
+    };
 
-    const upload = await env.MEDIA.createMultipartUpload(key, {
-      httpMetadata: { contentType: body.contentType || "application/octet-stream" },
-      customMetadata: { projectId },
-    });
+    const path = projectPath(env, projectId, `source/${objectName(body.filename)}`);
+    const session = await createUploadSession(env, path, "replace");
 
-    await env.DB.prepare("UPDATE projects SET stage = ?, source_key = ?, updated_at = ? WHERE id = ?")
-      .bind("UPLOADING", key, Date.now(), projectId)
+    await env.DB.prepare(
+      "UPDATE projects SET stage = ?, source_key = NULL, updated_at = ? WHERE id = ?",
+    )
+      .bind("UPLOADING", Date.now(), projectId)
       .run();
 
-    return json({ key, uploadId: upload.uploadId }, 201);
-  }
-
-  const uploadPart = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/part$/);
-  if (request.method === "PUT" && uploadPart) {
-    const key = url.searchParams.get("key");
-    const uploadId = url.searchParams.get("uploadId");
-    const partNumber = Number(url.searchParams.get("partNumber"));
-    if (!key || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) {
-      return json({ error: "Invalid multipart upload parameters" }, 400);
-    }
-
-    const upload = env.MEDIA.resumeMultipartUpload(key, uploadId);
-    const part = await upload.uploadPart(partNumber, request.body!);
-    return json({ partNumber: part.partNumber, etag: part.etag });
+    return json(
+      {
+        provider: "onedrive",
+        uploadUrl: session.uploadUrl,
+        expirationDateTime: session.expirationDateTime,
+        path,
+      },
+      201,
+    );
   }
 
   const completeUpload = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/complete$/);
   if (request.method === "POST" && completeUpload) {
     const projectId = decodeURIComponent(completeUpload[1]);
-    const body = (await request.json()) as {
-      key: string;
-      uploadId: string;
-      parts: Array<{ partNumber: number; etag: string }>;
-    };
+    const body = (await request.json()) as { itemId: string };
 
-    const upload = env.MEDIA.resumeMultipartUpload(body.key, body.uploadId);
-    await upload.complete(body.parts);
+    const item = await assertProjectItem(env, projectId, body.itemId);
 
-    await env.DB.prepare("UPDATE projects SET stage = ?, source_key = ?, updated_at = ? WHERE id = ?")
-      .bind("UPLOADED", body.key, Date.now(), projectId)
+    await env.DB.prepare(
+      "UPDATE projects SET stage = ?, source_key = ?, updated_at = ? WHERE id = ?",
+    )
+      .bind("UPLOADED", item.id, Date.now(), projectId)
       .run();
 
     await env.PIPELINE_QUEUE.send({
       type: "probe",
       projectId,
-      sourceKey: body.key,
+      sourceKey: item.id,
     });
 
-    return json({ ok: true, key: body.key });
+    return json({
+      ok: true,
+      provider: "onedrive",
+      item: {
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        webUrl: item.webUrl,
+      },
+    });
   }
 
   const render = url.pathname.match(/^\/api\/projects\/([^/]+)\/render$/);
@@ -118,9 +125,12 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
       .bind(projectId)
       .first<{ source_key: string | null }>();
 
-    if (!project?.source_key) return json({ error: "Project has no source video" }, 409);
+    if (!project?.source_key) {
+      return json({ error: "Project has no source video" }, 409);
+    }
 
-    const outputKey = `projects/${projectId}/output/final.mp4`;
+    const outputPath = projectPath(env, projectId, "output/final.mp4");
+
     await env.DB.prepare("UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?")
       .bind("RENDER_QUEUED", Date.now(), projectId)
       .run();
@@ -129,47 +139,19 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
       type: "render",
       projectId,
       sourceKey: project.source_key,
-      outputKey,
+      outputKey: outputPath,
       subtitleKey: body.subtitleKey,
       dubAudioKey: body.dubAudioKey,
     });
 
-    return json({ ok: true, stage: "RENDER_QUEUED", outputKey }, 202);
+    return json({
+      ok: true,
+      stage: "RENDER_QUEUED",
+      outputPath,
+    }, 202);
   }
 
   return null;
-}
-
-async function handleInternalMedia(request: Request, env: Env, url: URL): Promise<Response> {
-  const auth = request.headers.get("authorization");
-  if (!env.INTERNAL_MEDIA_TOKEN || auth !== `Bearer ${env.INTERNAL_MEDIA_TOKEN}`) {
-    return json({ error: "Unauthorized" }, 401);
-  }
-
-  const key = url.searchParams.get("key");
-  if (!key || !key.startsWith("projects/")) return json({ error: "Invalid key" }, 400);
-
-  if (request.method === "GET") {
-    const object = await env.MEDIA.get(key);
-    if (!object) return new Response("Not found", { status: 404 });
-
-    const headers = new Headers();
-    object.writeHttpMetadata(headers);
-    headers.set("etag", object.httpEtag);
-    headers.set("content-length", String(object.size));
-    return new Response(object.body, { headers });
-  }
-
-  if (request.method === "PUT") {
-    const object = await env.MEDIA.put(key, request.body, {
-      httpMetadata: {
-        contentType: request.headers.get("content-type") || "application/octet-stream",
-      },
-    });
-    return json({ key, etag: object.httpEtag, size: object.size }, 201);
-  }
-
-  return new Response("Method not allowed", { status: 405 });
 }
 
 export default {
@@ -177,11 +159,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/health") {
-      return json({ ok: true, service: "autovideotranslate" });
-    }
-
-    if (url.pathname === "/api/internal/media") {
-      return handleInternalMedia(request, env, url);
+      return json({ ok: true, service: "autovideotranslate", storage: "onedrive" });
     }
 
     const projectResponse = await handleProjectApi(request, env, url);
