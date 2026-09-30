@@ -7,72 +7,47 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024  # 10 MiB
-
-
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, capture_output=True, check=True)
 
 
-def download(url: str, destination: Path) -> None:
+def auth_headers(token: str) -> list[str]:
+    return ["-H", f"Authorization: Bearer {token}"]
+
+
+def download(url: str, token: str, destination: Path) -> None:
     run([
         "curl",
         "--fail",
         "--location",
         "--silent",
         "--show-error",
+        *auth_headers(token),
         "-o",
         str(destination),
         url,
     ])
 
 
-def upload_session_file(upload_url: str, source: Path) -> dict:
-    total = source.stat().st_size
-    last_response = None
-
-    with source.open("rb") as handle:
-      start = 0
-      while start < total:
-        chunk = handle.read(UPLOAD_CHUNK_SIZE)
-        if not chunk:
-          break
-
-        end = start + len(chunk) - 1
-        command = [
-            "curl",
-            "--fail-with-body",
-            "--silent",
-            "--show-error",
-            "-X",
-            "PUT",
-            "-H",
-            f"Content-Length: {len(chunk)}",
-            "-H",
-            f"Content-Range: bytes {start}-{end}/{total}",
-            "--data-binary",
-            "@-",
-            upload_url,
-        ]
-        completed = subprocess.run(
-            command,
-            input=chunk,
-            capture_output=True,
-            check=True,
-        )
-
-        if completed.stdout:
-            last_response = json.loads(completed.stdout.decode("utf-8"))
-        start = end + 1
-
-    if not isinstance(last_response, dict) or not last_response.get("id"):
-        raise RuntimeError("OneDrive upload session did not return the completed driveItem")
-
-    return last_response
+def upload(url: str, token: str, source: Path, content_type: str) -> None:
+    run([
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "-X",
+        "PUT",
+        *auth_headers(token),
+        "-H",
+        f"Content-Type: {content_type}",
+        "--upload-file",
+        str(source),
+        url,
+    ])
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AutoVideoTranslateMedia/0.2"
+    server_version = "AutoVideoTranslateMedia/0.3"
 
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -118,70 +93,62 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_probe(self) -> None:
         body = self.read_json()
-        source_url = body["source_url"]
-
         result = run([
             "ffprobe",
             "-v",
             "error",
+            "-headers",
+            f"Authorization: Bearer {body['token']}\r\n",
             "-show_format",
             "-show_streams",
             "-of",
             "json",
-            source_url,
+            body["source_url"],
         ])
         metadata = json.loads(result.stdout)
 
         fmt = metadata.get("format", {})
-        video = next(
-            (stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "video"),
-            {},
-        )
-        audio = next(
-            (stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "audio"),
-            {},
-        )
+        video = next((s for s in metadata.get("streams", []) if s.get("codec_type") == "video"), {})
+        audio = next((s for s in metadata.get("streams", []) if s.get("codec_type") == "audio"), {})
 
-        self.send_json(
-            200,
-            {
-                "duration": float(fmt.get("duration", 0) or 0),
-                "size": int(fmt.get("size", 0) or 0),
-                "bit_rate": int(fmt.get("bit_rate", 0) or 0),
-                "video": {
-                    "codec": video.get("codec_name"),
-                    "width": video.get("width"),
-                    "height": video.get("height"),
-                    "fps": video.get("avg_frame_rate"),
-                },
-                "audio": {
-                    "codec": audio.get("codec_name"),
-                    "sample_rate": audio.get("sample_rate"),
-                    "channels": audio.get("channels"),
-                },
+        self.send_json(200, {
+            "duration": float(fmt.get("duration", 0) or 0),
+            "size": int(fmt.get("size", 0) or 0),
+            "bit_rate": int(fmt.get("bit_rate", 0) or 0),
+            "video": {
+                "codec": video.get("codec_name"),
+                "width": video.get("width"),
+                "height": video.get("height"),
+                "fps": video.get("avg_frame_rate"),
             },
-        )
+            "audio": {
+                "codec": audio.get("codec_name"),
+                "sample_rate": audio.get("sample_rate"),
+                "channels": audio.get("channels"),
+            },
+        })
 
     def handle_render(self) -> None:
         body = self.read_json()
+        token = body["token"]
 
         with tempfile.TemporaryDirectory(prefix="avt-") as tmp:
             work = Path(tmp)
             source = work / "source.mp4"
             output = work / "output.mp4"
 
-            download(body["source_url"], source)
+            download(body["source_url"], token, source)
 
             dub = None
             subtitle = None
 
             if body.get("dub_audio_url"):
                 dub = work / "dub.wav"
-                download(body["dub_audio_url"], dub)
+                download(body["dub_audio_url"], token, dub)
 
             if body.get("subtitle_url"):
                 subtitle = work / "subtitle.ass"
-                download(body["subtitle_url"], subtitle)
+                download(body["subtitle_url"], token, subtitle)
 
             cmd = ["ffmpeg", "-y", "-i", str(source)]
 
@@ -198,37 +165,23 @@ class Handler(BaseHTTPRequestHandler):
                 cmd += ["-map", "0:v:0", "-map", "0:a?"]
 
             cmd += [
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-crf",
-                "20",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-movflags",
-                "+faststart",
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "20",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
                 str(output),
             ]
 
             run(cmd)
-            drive_item = upload_session_file(body["output_upload_url"], output)
+            upload(body["output_url"], token, output, "video/mp4")
 
-            self.send_json(
-                200,
-                {
-                    "ok": True,
-                    "bytes": output.stat().st_size,
-                    "item": {
-                        "id": drive_item.get("id"),
-                        "name": drive_item.get("name"),
-                        "size": drive_item.get("size"),
-                        "webUrl": drive_item.get("webUrl"),
-                    },
-                },
-            )
+            self.send_json(200, {
+                "ok": True,
+                "bytes": output.stat().st_size,
+                "output": body["output_url"],
+            })
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[media] {self.address_string()} - {fmt % args}", flush=True)
