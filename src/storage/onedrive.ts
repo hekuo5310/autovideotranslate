@@ -39,24 +39,46 @@ function b64(bytes: Uint8Array): string {
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s);
 }
-function unb64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), c => c.charCodeAt(0));
+
+function unb64(value: string): ArrayBuffer {
+  const decoded = atob(value);
+  const bytes = new Uint8Array(new ArrayBuffer(decoded.length));
+  for (let i = 0; i < decoded.length; i += 1) {
+    bytes[i] = decoded.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
+
 async function aesKey(secret: string): Promise<CryptoKey> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
   return crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
+
 export async function encryptSecret(secret: string, plaintext: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await aesKey(secret);
-  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext)));
+  const cipher = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(plaintext),
+    ),
+  );
   return `v1.${b64(iv)}.${b64(cipher)}`;
 }
+
 async function decryptSecret(secret: string, stored: string): Promise<string> {
   const [version, iv64, cipher64] = stored.split(".");
-  if (version !== "v1" || !iv64 || !cipher64) throw new Error("Invalid encrypted token format");
+  if (version !== "v1" || !iv64 || !cipher64) {
+    throw new Error("Invalid encrypted token format");
+  }
+
   const key = await aesKey(secret);
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv64) }, key, unb64(cipher64));
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: unb64(iv64) },
+    key,
+    unb64(cipher64),
+  );
   return new TextDecoder().decode(plain);
 }
 
