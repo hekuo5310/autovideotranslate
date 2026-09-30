@@ -1,20 +1,9 @@
 export type ProjectStage =
-  | "CREATED"
-  | "UPLOADING"
-  | "UPLOADED"
-  | "ANALYZING"
-  | "TRANSCRIBING"
-  | "TRANSLATING"
-  | "AI_QA"
-  | "WAITING_TRANSLATION_REVIEW"
-  | "TTS_GENERATING"
-  | "TTS_QA"
-  | "WAITING_DUB_REVIEW"
-  | "RENDER_QUEUED"
-  | "RENDERING"
-  | "WAITING_FINAL_REVIEW"
-  | "COMPLETED"
-  | "FAILED";
+  | "CREATED" | "UPLOADING" | "UPLOADED" | "ANALYZING"
+  | "TRANSCRIBING" | "TRANSLATING" | "AI_QA"
+  | "WAITING_TRANSLATION_REVIEW" | "TTS_GENERATING" | "TTS_QA"
+  | "WAITING_DUB_REVIEW" | "RENDER_QUEUED" | "RENDERING"
+  | "WAITING_FINAL_REVIEW" | "COMPLETED" | "FAILED";
 
 export interface ProjectRuntimeState {
   projectId: string;
@@ -34,7 +23,6 @@ export type PipelineMessage =
 
 export interface Env {
   DB: D1Database;
-  MEDIA: R2Bucket;
   PIPELINE_QUEUE: Queue<PipelineMessage>;
   PROJECT_JOBS: DurableObjectNamespace;
   ASSETS: Fetcher;
@@ -46,6 +34,10 @@ export interface Env {
   MIMO_BASE_URL: string;
   MIMO_TTS_MODEL: string;
 
-  INTERNAL_MEDIA_TOKEN: string;
   APP_ORIGIN: string;
+  ONEDRIVE_TENANT_ID: string;
+  ONEDRIVE_CLIENT_ID: string;
+  ONEDRIVE_CLIENT_SECRET?: string;
+  ONEDRIVE_ROOT_PATH: string;
+  TOKEN_ENCRYPTION_KEY: string;
 }
