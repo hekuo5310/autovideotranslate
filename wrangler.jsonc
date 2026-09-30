@@ -1,0 +1,73 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "autovideotranslate",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "containers": [
+    {
+      "class_name": "ProjectJob",
+      "scheduling_policy": "default",
+      "image": "./container/Dockerfile",
+      "instance_type": "standard-2",
+      "max_instances": 10
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_JOBS",
+        "class_name": "ProjectJob"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectJob"]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "autovideotranslate",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "autovideotranslate-media"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "PIPELINE_QUEUE",
+        "queue": "autovideotranslate-pipeline"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "autovideotranslate-pipeline",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5
+      }
+    ]
+  },
+  "vars": {
+    "GEMINI_MODEL": "gemini-3.8-flash",
+    "MIMO_BASE_URL": "https://api.xiaomimimo.com/v1",
+    "MIMO_TTS_MODEL": "mimo-v2.5-tts",
+    "APP_ORIGIN": "https://REPLACE_WITH_YOUR_DOMAIN"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
