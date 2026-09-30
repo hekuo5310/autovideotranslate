@@ -1,20 +1,9 @@
 export type ProjectStage =
-  | "CREATED"
-  | "UPLOADING"
-  | "UPLOADED"
-  | "ANALYZING"
-  | "TRANSCRIBING"
-  | "TRANSLATING"
-  | "AI_QA"
-  | "WAITING_TRANSLATION_REVIEW"
-  | "TTS_GENERATING"
-  | "TTS_QA"
-  | "WAITING_DUB_REVIEW"
-  | "RENDER_QUEUED"
-  | "RENDERING"
-  | "WAITING_FINAL_REVIEW"
-  | "COMPLETED"
-  | "FAILED";
+  | "CREATED" | "UPLOADING" | "UPLOADED" | "ANALYZING"
+  | "TRANSCRIBING" | "TRANSLATING" | "AI_QA"
+  | "WAITING_TRANSLATION_REVIEW" | "TTS_GENERATING" | "TTS_QA"
+  | "WAITING_DUB_REVIEW" | "RENDER_QUEUED" | "RENDERING"
+  | "WAITING_FINAL_REVIEW" | "COMPLETED" | "FAILED";
 
 export interface ProjectRuntimeState {
   projectId: string;
@@ -30,14 +19,7 @@ export interface ProjectRuntimeState {
 
 export type PipelineMessage =
   | { type: "probe"; projectId: string; sourceKey: string }
-  | {
-      type: "render";
-      projectId: string;
-      sourceKey: string;
-      outputKey: string;
-      subtitleKey?: string;
-      dubAudioKey?: string;
-    };
+  | { type: "render"; projectId: string; sourceKey: string; outputKey: string; subtitleKey?: string; dubAudioKey?: string };
 
 export interface Env {
   DB: D1Database;
@@ -52,11 +34,10 @@ export interface Env {
   MIMO_BASE_URL: string;
   MIMO_TTS_MODEL: string;
 
-  ONEDRIVE_AUTH_MODE: "client_credentials" | "refresh_token";
+  APP_ORIGIN: string;
   ONEDRIVE_TENANT_ID: string;
   ONEDRIVE_CLIENT_ID: string;
   ONEDRIVE_CLIENT_SECRET?: string;
-  ONEDRIVE_REFRESH_TOKEN?: string;
-  ONEDRIVE_DRIVE_ID: string;
   ONEDRIVE_ROOT_PATH: string;
+  TOKEN_ENCRYPTION_KEY: string;
 }

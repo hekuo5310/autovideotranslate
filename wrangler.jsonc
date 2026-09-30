@@ -19,19 +19,9 @@
     }
   ],
   "durable_objects": {
-    "bindings": [
-      {
-        "name": "PROJECT_JOBS",
-        "class_name": "ProjectJob"
-      }
-    ]
+    "bindings": [{ "name": "PROJECT_JOBS", "class_name": "ProjectJob" }]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["ProjectJob"]
-    }
-  ],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProjectJob"] }],
   "d1_databases": [
     {
       "binding": "DB",
@@ -41,32 +31,17 @@
     }
   ],
   "queues": {
-    "producers": [
-      {
-        "binding": "PIPELINE_QUEUE",
-        "queue": "autovideotranslate-pipeline"
-      }
-    ],
-    "consumers": [
-      {
-        "queue": "autovideotranslate-pipeline",
-        "max_batch_size": 5,
-        "max_batch_timeout": 5
-      }
-    ]
+    "producers": [{ "binding": "PIPELINE_QUEUE", "queue": "autovideotranslate-pipeline" }],
+    "consumers": [{ "queue": "autovideotranslate-pipeline", "max_batch_size": 5, "max_batch_timeout": 5 }]
   },
   "vars": {
     "GEMINI_MODEL": "gemini-3.8-flash",
     "MIMO_BASE_URL": "https://api.xiaomimimo.com/v1",
     "MIMO_TTS_MODEL": "mimo-v2.5-tts",
-
-    "ONEDRIVE_AUTH_MODE": "client_credentials",
-    "ONEDRIVE_TENANT_ID": "REPLACE_WITH_TENANT_ID",
+    "APP_ORIGIN": "https://REPLACE_WITH_YOUR_DOMAIN",
+    "ONEDRIVE_TENANT_ID": "common",
     "ONEDRIVE_CLIENT_ID": "REPLACE_WITH_CLIENT_ID",
-    "ONEDRIVE_DRIVE_ID": "REPLACE_WITH_DRIVE_ID",
     "ONEDRIVE_ROOT_PATH": "AutoVideoTranslate"
   },
-  "observability": {
-    "enabled": true
-  }
+  "observability": { "enabled": true }
 }

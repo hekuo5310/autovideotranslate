@@ -1,48 +1,40 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AutoVideoTranslate</title>
-  <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #fff; color: #111; }
-    main { max-width: 980px; margin: 0 auto; padding: 64px 24px; }
-    .eyebrow { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: #666; }
-    h1 { font-size: clamp(38px, 7vw, 72px); line-height: .96; margin: 18px 0 24px; }
-    p { color: #555; line-height: 1.7; max-width: 720px; }
-    .panel { margin-top: 42px; border: 1px solid #ddd; border-radius: 18px; padding: 22px; }
-    button, input { border-radius: 12px; border: 1px solid #111; padding: 12px 14px; font: inherit; }
-    button { background: #111; color: #fff; cursor: pointer; }
-    input { background: #fff; color: #111; min-width: 280px; }
-    pre { white-space: pre-wrap; background: #f7f7f7; border-radius: 12px; padding: 14px; min-height: 80px; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AutoVideoTranslate</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif}*{box-sizing:border-box}body{margin:0;background:#fff;color:#111}
+main{max-width:980px;margin:auto;padding:64px 24px}.eyebrow{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#666}
+h1{font-size:clamp(38px,7vw,72px);line-height:.96;margin:18px 0 24px}p{color:#555;line-height:1.7;max-width:720px}
+.panel{margin-top:28px;border:1px solid #ddd;border-radius:18px;padding:22px}button,input{border-radius:12px;border:1px solid #111;padding:12px 14px;font:inherit}
+button{background:#111;color:#fff;cursor:pointer}input{background:#fff;color:#111;min-width:280px}pre{white-space:pre-wrap;background:#f7f7f7;border-radius:12px;padding:14px;min-height:60px}
+</style>
 </head>
 <body>
-  <main>
-    <div class="eyebrow">AI assisted localization pipeline</div>
-    <h1>AutoVideoTranslate</h1>
-    <p>Gemini 负责视频理解与翻译，MiMo 负责中文 TTS，Cloudflare Durable Objects 管理项目状态，Container 内运行 FFmpeg，最终由人工完成字幕、配音与成片终审。</p>
-
-    <section class="panel">
-      <h2>项目 API smoke test</h2>
-      <input id="title" placeholder="项目名称" value="测试视频" />
-      <button id="create">创建项目</button>
-      <pre id="result">等待操作…</pre>
-    </section>
-  </main>
+<main>
+<div class="eyebrow">AI assisted localization pipeline</div>
+<h1>AutoVideoTranslate</h1>
+<p>Gemini + MiMo TTS + Cloudflare Containers/FFmpeg + OneDrive。</p>
+<section class="panel">
+<h2>OneDrive</h2>
+<p id="od">检查连接状态…</p>
+<button id="connect">连接 OneDrive</button>
+</section>
+<section class="panel">
+<h2>项目 API smoke test</h2>
+<input id="title" value="测试视频" />
+<button id="create">创建项目</button>
+<pre id="result">等待操作…</pre>
+</section>
+</main>
 <script>
-const result = document.querySelector("#result");
-document.querySelector("#create").addEventListener("click", async () => {
-  result.textContent = "创建中…";
-  const response = await fetch("/api/projects", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: document.querySelector("#title").value })
-  });
-  result.textContent = JSON.stringify(await response.json(), null, 2);
-});
+const od=document.querySelector("#od");
+async function refresh(){const r=await fetch("/api/auth/onedrive/status");const x=await r.json();od.textContent=x.connected?("已连接："+(x.account_name||x.drive_id)):"尚未连接";}
+document.querySelector("#connect").onclick=()=>location.href="/api/auth/onedrive/start";
+document.querySelector("#create").onclick=async()=>{const result=document.querySelector("#result");result.textContent="创建中…";const r=await fetch("/api/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title:document.querySelector("#title").value})});result.textContent=JSON.stringify(await r.json(),null,2)};
+refresh();
 </script>
 </body>
 </html>
