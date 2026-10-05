@@ -35,26 +35,16 @@
     <button class="navbtn" id="newProject">+ 新建项目</button>
     <div class="project-list" id="projectList"></div>
   </aside>
-
   <main class="main">
-    <div class="topbar">
-      <h1 id="pageTitle">项目</h1>
-      <div class="health"><span class="dot" id="healthDot"></span><span id="healthText">检查服务…</span></div>
-    </div>
-
+    <div class="topbar"><h1 id="pageTitle">项目</h1><div class="health"><span class="dot" id="healthDot"></span><span id="healthText">检查服务…</span></div></div>
     <div id="welcome" class="empty">从左侧选择项目，或新建一个视频翻译项目。</div>
-
     <div id="workspace" class="grid" hidden>
       <section>
         <div class="card">
-          <div class="row" style="justify-content:space-between;margin-bottom:16px">
-            <div class="row"><span class="status" id="stageBadge">CREATED</span><span id="updatedAt" class="notice"></span></div>
-            <button class="btn secondary" id="refreshBtn">刷新</button>
-          </div>
+          <div class="row" style="justify-content:space-between;margin-bottom:16px"><div class="row"><span class="status" id="stageBadge">CREATED</span><span id="updatedAt" class="notice"></span></div><button class="btn secondary" id="refreshBtn">刷新</button></div>
           <div class="video-wrap" id="videoWrap"><div class="video-empty">上传源视频后可在这里预览</div></div>
           <div class="details" id="mediaDetails"></div>
         </div>
-
         <div class="card" style="margin-top:22px">
           <h2>源视频</h2>
           <div class="upload" id="uploadBox">
@@ -62,151 +52,57 @@
             <label for="fileInput">选择视频并上传到 R2</label>
             <p>使用 R2 Multipart Upload，8 MiB 分片。上传完成后会自动进入媒体分析。</p>
             <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
-            <div class="progress-text" id="progressText"></div>
-            <div class="error" id="uploadError"></div>
+            <div class="progress-text" id="progressText"></div><div class="error" id="uploadError"></div>
           </div>
         </div>
-
         <div class="card" style="margin-top:22px">
-          <div class="row" style="justify-content:space-between">
-            <div><h2 style="margin-bottom:5px">成片渲染</h2><div class="notice">当前第一版会使用原视频，并在后续接入字幕 ASS 与 MiMo 配音轨。</div></div>
-            <button class="btn" id="renderBtn">开始渲染</button>
-          </div>
+          <div class="row" style="justify-content:space-between"><div><h2 style="margin-bottom:5px">成片渲染</h2><div class="notice">当前第一版没有字幕/配音时会直接复制源视频；接入字幕或配音后再进行必要的 FFmpeg 处理。</div></div><button class="btn" id="renderBtn">开始渲染</button></div>
           <div id="outputArea" style="margin-top:16px"></div>
         </div>
       </section>
-
       <aside>
-        <div class="card">
-          <h2>流水线</h2>
-          <div class="stage-list" id="stageList"></div>
-        </div>
-        <div class="card" style="margin-top:22px">
-          <h2>运行信息</h2>
-          <pre id="runtime" style="margin:0;background:var(--soft);border-radius:12px;padding:13px;white-space:pre-wrap;word-break:break-word;font-size:11px;max-height:360px;overflow:auto">—</pre>
-        </div>
+        <div class="card"><h2>流水线</h2><div class="stage-list" id="stageList"></div></div>
+        <div class="card" style="margin-top:22px"><h2>运行信息</h2><pre id="runtime" style="margin:0;background:var(--soft);border-radius:12px;padding:13px;white-space:pre-wrap;word-break:break-word;font-size:11px;max-height:360px;overflow:auto">—</pre></div>
       </aside>
     </div>
   </main>
 </div>
-
-<div class="modal" id="modal">
-  <div class="dialog">
-    <h2>新建项目</h2>
-    <input class="input" id="projectName" placeholder="例如：EP01 中文字幕" />
-    <div class="row" style="justify-content:flex-end">
-      <button class="btn secondary" id="cancelCreate">取消</button>
-      <button class="btn" id="confirmCreate">创建</button>
-    </div>
-    <div class="error" id="createError"></div>
-  </div>
-</div>
-
+<div class="modal" id="modal"><div class="dialog"><h2>新建项目</h2><input class="input" id="projectName" placeholder="例如：EP01 中文字幕" /><div class="row" style="justify-content:flex-end"><button class="btn secondary" id="cancelCreate">取消</button><button class="btn" id="confirmCreate">创建</button></div><div class="error" id="createError"></div></div></div>
 <script>
 const $ = (s) => document.querySelector(s);
 const state = { projects: [], selected: null, detail: null, uploading: false, timer: null };
-const stages = [
-  "CREATED","UPLOADING","UPLOADED","ANALYZING","TRANSCRIBING","TRANSLATING","AI_QA",
-  "WAITING_TRANSLATION_REVIEW","TTS_GENERATING","TTS_QA","WAITING_DUB_REVIEW",
-  "RENDER_QUEUED","RENDERING","WAITING_FINAL_REVIEW","COMPLETED"
-];
-const stageNames = {
-  CREATED:"已创建",UPLOADING:"上传中",UPLOADED:"已上传",ANALYZING:"媒体分析",TRANSCRIBING:"识别中",
-  TRANSLATING:"翻译中",AI_QA:"AI 质检",WAITING_TRANSLATION_REVIEW:"等待字幕审核",TTS_GENERATING:"生成配音",
-  TTS_QA:"配音质检",WAITING_DUB_REVIEW:"等待配音审核",RENDER_QUEUED:"等待渲染",RENDERING:"渲染中",
-  WAITING_FINAL_REVIEW:"等待成片终审",COMPLETED:"已完成",FAILED:"失败"
-};
-
-async function api(path, options={}) {
-  const r = await fetch(path, options);
-  const type = r.headers.get("content-type") || "";
-  const body = type.includes("application/json") ? await r.json() : await r.text();
-  if (!r.ok) throw new Error(typeof body === "string" ? body : (body.error || JSON.stringify(body)));
-  return body;
-}
-
-function fmtDate(ts){ if(!ts) return ""; return new Date(Number(ts)).toLocaleString(); }
-function fmtBytes(n){ if(!n && n!==0) return "—"; const u=["B","KiB","MiB","GiB"]; let i=0,v=Number(n); while(v>=1024&&i<u.length-1){v/=1024;i++} return `${v.toFixed(i?1:0)} ${u[i]}`; }
-
-async function checkHealth(){
-  try{const h=await api("/api/health");$("#healthDot").classList.add("ok");$("#healthText").textContent=`服务正常 · ${h.storage.toUpperCase()}`}
-  catch{$("#healthText").textContent="服务异常"}
-}
-
-async function loadProjects(selectId){
-  const data=await api("/api/projects"); state.projects=data.projects||[]; renderProjectList();
-  if(selectId) await selectProject(selectId); else if(state.selected) await selectProject(state.selected);
-}
-
-function renderProjectList(){
-  const box=$("#projectList"); box.innerHTML="";
-  if(!state.projects.length){box.innerHTML='<div class="notice" style="padding:10px">还没有项目</div>';return}
-  for(const p of state.projects){
-    const b=document.createElement("button");b.className="project-item"+(p.id===state.selected?" active":"");
-    b.innerHTML=`<div class="project-title"></div><div class="project-meta"><span>${stageNames[p.stage]||p.stage}</span><span>${fmtDate(p.updated_at)}</span></div>`;
-    b.querySelector(".project-title").textContent=p.title;
-    b.onclick=()=>selectProject(p.id); box.appendChild(b);
-  }
-}
-
-async function selectProject(id){
-  state.selected=id; renderProjectList(); $("#welcome").hidden=true; $("#workspace").hidden=false;
-  try{state.detail=await api(`/api/projects/${encodeURIComponent(id)}`); renderDetail(); schedulePoll();}
-  catch(e){alert(e.message)}
-}
-
-function renderStages(stage){
-  const box=$("#stageList"); box.innerHTML=""; const current=stages.indexOf(stage);
-  stages.forEach((s,i)=>{const d=document.createElement("div");d.className="stage "+(stage==="FAILED"?"":i<current?"done":i===current?"current":"");d.innerHTML=`<span class="n">${i+1}</span><span>${stageNames[s]||s}</span>`;box.appendChild(d)});
-  if(stage==="FAILED"){const d=document.createElement("div");d.className="stage current";d.innerHTML='<span class="n">!</span><span>任务失败</span>';box.prepend(d)}
-}
-
+const stages = ["CREATED","UPLOADING","UPLOADED","ANALYZING","TRANSCRIBING","TRANSLATING","AI_QA","WAITING_TRANSLATION_REVIEW","TTS_GENERATING","TTS_QA","WAITING_DUB_REVIEW","RENDER_QUEUED","RENDERING","WAITING_FINAL_REVIEW","COMPLETED"];
+const stageNames = {CREATED:"已创建",UPLOADING:"上传中",UPLOADED:"已上传",ANALYZING:"媒体分析",TRANSCRIBING:"识别中",TRANSLATING:"翻译中",AI_QA:"AI 质检",WAITING_TRANSLATION_REVIEW:"等待字幕审核",TTS_GENERATING:"生成配音",TTS_QA:"配音质检",WAITING_DUB_REVIEW:"等待配音审核",RENDER_QUEUED:"等待渲染",RENDERING:"渲染中",WAITING_FINAL_REVIEW:"等待成片终审",COMPLETED:"已完成",FAILED:"失败"};
+async function api(path, options={}) { const r=await fetch(path,options); const type=r.headers.get("content-type")||""; const body=type.includes("application/json")?await r.json():await r.text(); if(!r.ok) throw new Error(typeof body==="string"?body:(body.error||JSON.stringify(body))); return body; }
+function fmtDate(ts){if(!ts)return"";return new Date(Number(ts)).toLocaleString()}
+function fmtBytes(n){if(!n&&n!==0)return"—";const u=["B","KiB","MiB","GiB"];let i=0,v=Number(n);while(v>=1024&&i<u.length-1){v/=1024;i++}return `${v.toFixed(i?1:0)} ${u[i]}`}
+async function checkHealth(){try{const h=await api("/api/health");$("#healthDot").classList.add("ok");$("#healthText").textContent=`服务正常 · ${h.storage.toUpperCase()}`}catch{$("#healthText").textContent="服务异常"}}
+async function loadProjects(selectId){const data=await api("/api/projects");state.projects=data.projects||[];renderProjectList();if(selectId)await selectProject(selectId);else if(state.selected)await selectProject(state.selected)}
+function renderProjectList(){const box=$("#projectList");box.innerHTML="";if(!state.projects.length){box.innerHTML='<div class="notice" style="padding:10px">还没有项目</div>';return}for(const p of state.projects){const b=document.createElement("button");b.className="project-item"+(p.id===state.selected?" active":"");b.innerHTML=`<div class="project-title"></div><div class="project-meta"><span>${stageNames[p.stage]||p.stage}</span><span>${fmtDate(p.updated_at)}</span></div>`;b.querySelector(".project-title").textContent=p.title;b.onclick=()=>selectProject(p.id);box.appendChild(b)}}
+async function selectProject(id){state.selected=id;renderProjectList();$("#welcome").hidden=true;$("#workspace").hidden=false;try{state.detail=await api(`/api/projects/${encodeURIComponent(id)}`);renderDetail();schedulePoll()}catch(e){alert(e.message)}}
+function renderStages(stage){const box=$("#stageList");box.innerHTML="";const current=stages.indexOf(stage);stages.forEach((s,i)=>{const d=document.createElement("div");d.className="stage "+(stage==="FAILED"?"":i<current?"done":i===current?"current":"");d.innerHTML=`<span class="n">${i+1}</span><span>${stageNames[s]||s}</span>`;box.appendChild(d)});if(stage==="FAILED"){const d=document.createElement("div");d.className="stage current";d.innerHTML='<span class="n">!</span><span>任务失败</span>';box.prepend(d)}}
 function renderDetail(){
-  const {project,runtime}=state.detail; state.selected=project.id; $("#pageTitle").textContent=project.title; $("#stageBadge").textContent=stageNames[project.stage]||project.stage; $("#updatedAt").textContent=fmtDate(project.updated_at); renderStages(project.stage); $("#runtime").textContent=JSON.stringify(runtime||{},null,2);
-  let meta={}; try{meta=project.metadata_json?JSON.parse(project.metadata_json):{}}catch{}
-  const video=meta.video||{}, audio=meta.audio||{};
+  const {project,runtime}=state.detail;state.selected=project.id;$("#pageTitle").textContent=project.title;$("#stageBadge").textContent=stageNames[project.stage]||project.stage;$("#updatedAt").textContent=fmtDate(project.updated_at);renderStages(project.stage);$("#runtime").textContent=JSON.stringify(runtime||{},null,2);
+  let meta={};try{meta=project.metadata_json?JSON.parse(project.metadata_json):{}}catch{}const video=meta.video||{},audio=meta.audio||{};
   $("#mediaDetails").innerHTML=`<div class="metric"><small>时长</small><strong>${meta.duration?Number(meta.duration).toFixed(1)+" s":"—"}</strong></div><div class="metric"><small>大小</small><strong>${fmtBytes(meta.size)}</strong></div><div class="metric"><small>视频</small><strong>${video.codec||"—"} ${video.width?video.width+"×"+video.height:""}</strong></div><div class="metric"><small>音频</small><strong>${audio.codec||"—"} ${audio.channels?audio.channels+" ch":""}</strong></div>`;
-  const wrap=$("#videoWrap");
-  if(project.source_key){wrap.innerHTML=`<video controls preload="metadata" src="/api/projects/${encodeURIComponent(project.id)}/media?target=source"></video>`}else{wrap.innerHTML='<div class="video-empty">上传源视频后可在这里预览</div>'}
-  $("#renderBtn").disabled=!project.source_key || ["UPLOADING","ANALYZING","RENDERING","RENDER_QUEUED"].includes(project.stage);
+  const wrap=$("#videoWrap");if(project.source_key){wrap.innerHTML=`<video controls preload="metadata" src="/api/projects/${encodeURIComponent(project.id)}/media?target=source"></video>`}else{wrap.innerHTML='<div class="video-empty">上传源视频后可在这里预览</div>'}
+  const renderActive=["RENDER_QUEUED","RENDERING"].includes(project.stage);const btn=$("#renderBtn");btn.disabled=!project.source_key||["UPLOADING","ANALYZING"].includes(project.stage)||renderActive;btn.textContent=project.stage==="RENDER_QUEUED"?"等待渲染":project.stage==="RENDERING"?"正在渲染":project.output_key?"重新渲染":"开始渲染";
   const out=$("#outputArea");
-  if(project.output_key){out.innerHTML=`<div class="video-wrap"><video controls preload="metadata" src="/api/projects/${encodeURIComponent(project.id)}/media?target=output"></video></div><div class="row" style="margin-top:10px"><a class="btn secondary" style="text-decoration:none" href="/api/projects/${encodeURIComponent(project.id)}/media?target=output" target="_blank">打开成片</a></div>`}else{out.innerHTML='<div class="notice">尚未生成成片。</div>'}
+  if(project.output_key){out.innerHTML=`<div class="video-wrap"><video controls preload="metadata" src="/api/projects/${encodeURIComponent(project.id)}/media?target=output"></video></div><div class="row" style="margin-top:10px"><a class="btn secondary" style="text-decoration:none" href="/api/projects/${encodeURIComponent(project.id)}/media?target=output" target="_blank">打开成片</a></div>`}
+  else if(project.stage==="RENDER_QUEUED"){out.innerHTML='<div class="notice">渲染任务已提交，正在等待 Container 执行…</div>'}
+  else if(project.stage==="RENDERING"){out.innerHTML='<div class="notice">正在渲染并写回 R2，请保持页面打开；状态会自动刷新。</div>'}
+  else if(project.stage==="FAILED"){out.innerHTML=`<div class="error">任务失败：${runtime?.error||"请查看运行信息"}</div>`}
+  else{out.innerHTML='<div class="notice">尚未开始渲染。</div>'}
 }
-
-function schedulePoll(){
-  clearTimeout(state.timer); if(!state.selected)return;
-  const active=state.detail && ["UPLOADING","UPLOADED","ANALYZING","TRANSCRIBING","TRANSLATING","AI_QA","TTS_GENERATING","TTS_QA","RENDER_QUEUED","RENDERING"].includes(state.detail.project.stage);
-  state.timer=setTimeout(async()=>{if(!state.selected)return;try{state.detail=await api(`/api/projects/${encodeURIComponent(state.selected)}`);renderDetail();await loadProjects();}catch{}schedulePoll()},active?2500:8000);
-}
-
-async function uploadFile(file){
-  if(!state.selected||state.uploading)return; state.uploading=true; $("#uploadError").textContent=""; $("#progress").style.display="block"; $("#progressText").style.display="block"; $("#bar").style.width="0%";
-  let session=null;
-  try{
-    session=await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/init`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({filename:file.name,contentType:file.type||"application/octet-stream"})});
-    const size=8*1024*1024, parts=[]; const count=Math.ceil(file.size/size);
-    for(let i=0;i<count;i++){
-      const chunk=file.slice(i*size,Math.min(file.size,(i+1)*size));
-      const q=new URLSearchParams({key:session.key,uploadId:session.uploadId,partNumber:String(i+1)});
-      const part=await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/part?${q}`,{method:"PUT",body:chunk});
-      parts.push(part); const pct=Math.round(((i+1)/count)*100); $("#bar").style.width=pct+"%"; $("#progressText").textContent=`上传 ${i+1}/${count} · ${pct}%`;
-    }
-    await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/complete`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:session.key,uploadId:session.uploadId,parts})});
-    $("#progressText").textContent="上传完成，正在分析媒体…"; await selectProject(state.selected); await loadProjects();
-  }catch(e){
-    $("#uploadError").textContent=e.message;
-    if(session){try{await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/abort`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:session.key,uploadId:session.uploadId})})}catch{}}
-  }finally{state.uploading=false;$("#fileInput").value=""}
-}
-
+function schedulePoll(){clearTimeout(state.timer);if(!state.selected)return;const active=state.detail&&["UPLOADING","UPLOADED","ANALYZING","TRANSCRIBING","TRANSLATING","AI_QA","TTS_GENERATING","TTS_QA","RENDER_QUEUED","RENDERING"].includes(state.detail.project.stage);state.timer=setTimeout(async()=>{if(!state.selected)return;try{state.detail=await api(`/api/projects/${encodeURIComponent(state.selected)}`);renderDetail();await loadProjects()}catch{}schedulePoll()},active?2500:8000)}
+async function uploadFile(file){if(!state.selected||state.uploading)return;state.uploading=true;$("#uploadError").textContent="";$("#progress").style.display="block";$("#progressText").style.display="block";$("#bar").style.width="0%";let session=null;try{session=await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/init`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({filename:file.name,contentType:file.type||"application/octet-stream"})});const size=8*1024*1024,parts=[];const count=Math.ceil(file.size/size);for(let i=0;i<count;i++){const chunk=file.slice(i*size,Math.min(file.size,(i+1)*size));const q=new URLSearchParams({key:session.key,uploadId:session.uploadId,partNumber:String(i+1)});const part=await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/part?${q}`,{method:"PUT",body:chunk});parts.push(part);const pct=Math.round(((i+1)/count)*100);$("#bar").style.width=pct+"%";$("#progressText").textContent=`上传 ${i+1}/${count} · ${pct}%`}await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/complete`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:session.key,uploadId:session.uploadId,parts})});$("#progressText").textContent="上传完成，正在分析媒体…";await selectProject(state.selected);await loadProjects()}catch(e){$("#uploadError").textContent=e.message;if(session){try{await api(`/api/projects/${encodeURIComponent(state.selected)}/uploads/abort`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:session.key,uploadId:session.uploadId})})}catch{}}}finally{state.uploading=false;$("#fileInput").value=""}}
 $("#newProject").onclick=()=>{$("#modal").classList.add("open");$("#projectName").focus()};
 $("#cancelCreate").onclick=()=>$("#modal").classList.remove("open");
 $("#confirmCreate").onclick=async()=>{const name=$("#projectName").value.trim();$("#createError").textContent="";try{const p=await api("/api/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title:name||"未命名项目"})});$("#modal").classList.remove("open");$("#projectName").value="";await loadProjects(p.id)}catch(e){$("#createError").textContent=e.message}};
 $("#fileInput").onchange=e=>{const file=e.target.files?.[0];if(file)uploadFile(file)};
 $("#refreshBtn").onclick=()=>state.selected&&selectProject(state.selected);
-$("#renderBtn").onclick=async()=>{if(!state.selected)return;$("#renderBtn").disabled=true;try{await api(`/api/projects/${encodeURIComponent(state.selected)}/render`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});await selectProject(state.selected);await loadProjects()}catch(e){alert(e.message)}finally{$("#renderBtn").disabled=false}};
+$("#renderBtn").onclick=async()=>{if(!state.selected)return;const btn=$("#renderBtn");btn.disabled=true;btn.textContent="提交中";$("#outputArea").innerHTML='<div class="notice">正在提交渲染任务…</div>';try{await api(`/api/projects/${encodeURIComponent(state.selected)}/render`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});$("#outputArea").innerHTML='<div class="notice">渲染任务已提交，正在等待 Container 执行…</div>';await selectProject(state.selected);await loadProjects()}catch(e){$("#outputArea").innerHTML=`<div class="error">提交渲染失败：${e.message}</div>`;btn.disabled=false;btn.textContent="重试渲染"}};
 $("#projectName").onkeydown=e=>{if(e.key==="Enter")$("#confirmCreate").click()};
-
 checkHealth();loadProjects().catch(e=>{$("#welcome").textContent="加载失败："+e.message});
 </script>
 </body>

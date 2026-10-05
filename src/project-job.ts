@@ -56,10 +56,16 @@ export class ProjectJob extends DurableObject<Env> {
       await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
       this.ctx.waitUntil(
         container.monitor().catch(async (error: unknown) => {
-          await this.writeState({
-            stage: "FAILED",
-            error: error instanceof Error ? error.message : String(error),
-          });
+          const current = await this.readState();
+          const message = error instanceof Error ? error.message : String(error);
+          await this.writeState({ stage: "FAILED", error: message });
+          if (current?.projectId) {
+            await this.env.DB.prepare(
+              "UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?",
+            )
+              .bind("FAILED", Date.now(), current.projectId)
+              .run();
+          }
         }),
       );
     }
@@ -115,10 +121,15 @@ export class ProjectJob extends DurableObject<Env> {
       });
       return json(state);
     } catch (error) {
-      const state = await this.writeState({
-        stage: "FAILED",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      const state = await this.writeState({ stage: "FAILED", error: message });
+      if (current?.projectId) {
+        await this.env.DB.prepare(
+          "UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?",
+        )
+          .bind("FAILED", Date.now(), current.projectId)
+          .run();
+      }
       return json(state, 500);
     }
   }
@@ -138,6 +149,12 @@ export class ProjectJob extends DurableObject<Env> {
       outputKey: input.outputKey,
       error: undefined,
     });
+
+    await this.env.DB.prepare(
+      "UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?",
+    )
+      .bind("RENDERING", Date.now(), current.projectId)
+      .run();
 
     try {
       const port = await this.ensureContainer();
@@ -174,10 +191,13 @@ export class ProjectJob extends DurableObject<Env> {
 
       return json(state);
     } catch (error) {
-      const state = await this.writeState({
-        stage: "FAILED",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      const state = await this.writeState({ stage: "FAILED", error: message });
+      await this.env.DB.prepare(
+        "UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?",
+      )
+        .bind("FAILED", Date.now(), current.projectId)
+        .run();
       return json(state, 500);
     }
   }
