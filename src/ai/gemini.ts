@@ -66,7 +66,7 @@ async function uploadGeminiFile(
     body,
   });
   if (!uploaded.ok) throw new Error(`Gemini file upload failed (${uploaded.status}): ${await uploaded.text()}`);
-  const result = await uploaded.json<any>();
+  const result = await uploaded.json() as any;
   const file = result.file;
   if (!file?.name || !file?.uri) throw new Error("Gemini upload response did not contain file name/uri");
   return { name: file.name, uri: file.uri, mimeType: file.mimeType || mimeType };
