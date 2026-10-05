@@ -13,7 +13,62 @@ function projectStub(env: Env, projectId: string): DurableObjectStub {
   return env.PROJECT_JOBS.get(env.PROJECT_JOBS.idFromName(projectId));
 }
 
+async function handleProjectMedia(request: Request, env: Env, url: URL): Promise<Response | null> {
+  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/media$/);
+  if (request.method !== "GET" || !match) return null;
+
+  const projectId = decodeURIComponent(match[1]);
+  const target = url.searchParams.get("target");
+  if (target !== "source" && target !== "output") {
+    return json({ error: "target must be source or output" }, 400);
+  }
+
+  const project = await env.DB.prepare(
+    "SELECT source_key, output_key FROM projects WHERE id = ?",
+  )
+    .bind(projectId)
+    .first<{ source_key: string | null; output_key: string | null }>();
+
+  if (!project) return json({ error: "Project not found" }, 404);
+
+  const key = target === "source" ? project.source_key : project.output_key;
+  if (!key) return json({ error: `${target} media is not available` }, 404);
+  if (!key.startsWith(`projects/${projectId}/`)) {
+    return json({ error: "Invalid media key" }, 400);
+  }
+
+  const object = await env.MEDIA.get(key, {
+    range: request.headers,
+  });
+  if (!object) return new Response("Not found", { status: 404 });
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("accept-ranges", "bytes");
+  headers.set("cache-control", "private, max-age=60");
+
+  if (object.range) {
+    const range = object.range;
+    const offset = "offset" in range ? range.offset : 0;
+    const length = "length" in range ? range.length : object.size;
+    headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+    headers.set("content-length", String(length));
+    return new Response(object.body, { status: 206, headers });
+  }
+
+  headers.set("content-length", String(object.size));
+  return new Response(object.body, { headers });
+}
+
 async function handleProjectApi(request: Request, env: Env, url: URL): Promise<Response | null> {
+  if (request.method === "GET" && url.pathname === "/api/projects") {
+    const result = await env.DB.prepare(
+      "SELECT id, title, stage, source_key, output_key, metadata_json, created_at, updated_at FROM projects ORDER BY updated_at DESC LIMIT 100",
+    ).all();
+    return json({ projects: result.results });
+  }
+
   if (request.method === "POST" && url.pathname === "/api/projects") {
     const body = (await request.json().catch(() => ({}))) as { title?: string };
     const id = crypto.randomUUID();
@@ -33,6 +88,9 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
 
     return json({ id, stage: "CREATED" }, 201);
   }
+
+  const mediaResponse = await handleProjectMedia(request, env, url);
+  if (mediaResponse) return mediaResponse;
 
   const match = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
   if (request.method === "GET" && match) {
@@ -70,6 +128,7 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
 
   const uploadPart = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/part$/);
   if (request.method === "PUT" && uploadPart) {
+    const projectId = decodeURIComponent(uploadPart[1]);
     const key = url.searchParams.get("key");
     const uploadId = url.searchParams.get("uploadId");
     const partNumber = Number(url.searchParams.get("partNumber"));
@@ -77,10 +136,27 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
     if (!key || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) {
       return json({ error: "Invalid multipart upload parameters" }, 400);
     }
+    if (!key.startsWith(`projects/${projectId}/`)) {
+      return json({ error: "Upload key is outside this project" }, 400);
+    }
 
     const upload = env.MEDIA.resumeMultipartUpload(key, uploadId);
     const part = await upload.uploadPart(partNumber, request.body!);
     return json({ partNumber: part.partNumber, etag: part.etag });
+  }
+
+  const abortUpload = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/abort$/);
+  if (request.method === "POST" && abortUpload) {
+    const projectId = decodeURIComponent(abortUpload[1]);
+    const body = (await request.json()) as { key: string; uploadId: string };
+    if (!body.key?.startsWith(`projects/${projectId}/`) || !body.uploadId) {
+      return json({ error: "Invalid multipart upload parameters" }, 400);
+    }
+    await env.MEDIA.resumeMultipartUpload(body.key, body.uploadId).abort();
+    await env.DB.prepare("UPDATE projects SET stage = ?, source_key = NULL, updated_at = ? WHERE id = ?")
+      .bind("CREATED", Date.now(), projectId)
+      .run();
+    return json({ ok: true });
   }
 
   const completeUpload = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/complete$/);
