@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+COMMAND_TIMEOUT_SECONDS = 2 * 60 * 60
+
+
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, text=True, capture_output=True, check=True)
+    return subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
 
 
 def auth_headers(token: str) -> list[str]:
@@ -47,7 +57,7 @@ def upload(url: str, token: str, source: Path, content_type: str) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AutoVideoTranslateMedia/0.3"
+    server_version = "AutoVideoTranslateMedia/0.4"
 
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -76,6 +86,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_render()
                 return
             self.send_json(404, {"error": "not found"})
+        except subprocess.TimeoutExpired as exc:
+            self.send_json(504, {
+                "error": "media command timed out",
+                "command": exc.cmd,
+            })
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr
             if isinstance(stderr, bytes):
@@ -150,37 +165,47 @@ class Handler(BaseHTTPRequestHandler):
                 subtitle = work / "subtitle.ass"
                 download(body["subtitle_url"], token, subtitle)
 
-            cmd = ["ffmpeg", "-y", "-i", str(source)]
-
-            if dub:
-                cmd += ["-i", str(dub)]
-
-            if subtitle:
-                escaped = str(subtitle).replace("\\", "\\\\").replace(":", "\\:")
-                cmd += ["-vf", f"ass={escaped}"]
-
-            if dub:
-                cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+            # The first-stage render has no subtitle or dub. Re-encoding the entire
+            # video here is unnecessary and made the UI look permanently stuck.
+            if not dub and not subtitle:
+                shutil.copyfile(source, output)
+                render_mode = "copy"
             else:
-                cmd += ["-map", "0:v:0", "-map", "0:a?"]
+                cmd = ["ffmpeg", "-y", "-i", str(source)]
 
-            cmd += [
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "20",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-movflags", "+faststart",
-                str(output),
-            ]
+                if dub:
+                    cmd += ["-i", str(dub)]
 
-            run(cmd)
+                if subtitle:
+                    escaped = str(subtitle).replace("\\", "\\\\").replace(":", "\\:")
+                    cmd += ["-vf", f"ass={escaped}"]
+
+                if dub:
+                    cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+                else:
+                    cmd += ["-map", "0:v:0", "-map", "0:a?"]
+
+                if subtitle:
+                    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+                else:
+                    cmd += ["-c:v", "copy"]
+
+                if dub:
+                    cmd += ["-c:a", "aac", "-b:a", "192k"]
+                else:
+                    cmd += ["-c:a", "copy"]
+
+                cmd += ["-movflags", "+faststart", str(output)]
+                run(cmd)
+                render_mode = "subtitle" if subtitle else "dub"
+
             upload(body["output_url"], token, output, "video/mp4")
 
             self.send_json(200, {
                 "ok": True,
                 "bytes": output.stat().st_size,
                 "output": body["output_url"],
+                "mode": render_mode,
             })
 
     def log_message(self, fmt: str, *args) -> None:
