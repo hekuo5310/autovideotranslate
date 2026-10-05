@@ -52,7 +52,11 @@ export class ProjectJob extends DurableObject<Env> {
     if (!container) throw new Error("No Container is configured for ProjectJob");
 
     if (!container.running) {
-      container.start({ enableInternet: true });
+      // This Worker uses scheduling_policy = "default". For the current
+      // Durable Object Container API, default-policy containers take their
+      // image and instance type from Wrangler and must be started without
+      // durable_object-only options such as enableInternet/image.
+      container.start();
       await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
       this.ctx.waitUntil(
         container.monitor().catch(async (error: unknown) => {
