@@ -52,10 +52,6 @@ export class ProjectJob extends DurableObject<Env> {
     if (!container) throw new Error("No Container is configured for ProjectJob");
 
     if (!container.running) {
-      // This Worker uses scheduling_policy = "default". For the current
-      // Durable Object Container API, default-policy containers take their
-      // image and instance type from Wrangler and must be started without
-      // durable_object-only options such as enableInternet/image.
       container.start();
       await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
       this.ctx.waitUntil(
@@ -231,6 +227,32 @@ export class ProjectJob extends DurableObject<Env> {
     if (request.method === "POST" && url.pathname === "/probe") {
       const body = (await request.json()) as { sourceKey: string };
       return this.probe(body.sourceKey);
+    }
+
+    if (request.method === "POST" && url.pathname === "/render/start") {
+      const input = (await request.json()) as {
+        sourceKey: string;
+        outputKey: string;
+        subtitleKey?: string;
+        dubAudioKey?: string;
+      };
+      const current = await this.readState();
+      if (!current?.projectId) return json({ error: "Project is not initialized" }, 409);
+
+      await this.writeState({
+        stage: "RENDERING",
+        progress: 0,
+        outputKey: input.outputKey,
+        error: undefined,
+      });
+      await this.env.DB.prepare(
+        "UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?",
+      )
+        .bind("RENDERING", Date.now(), current.projectId)
+        .run();
+
+      this.ctx.waitUntil(this.render(input).then(() => undefined));
+      return json({ ok: true, stage: "RENDERING" }, 202);
     }
 
     if (request.method === "POST" && url.pathname === "/render") {
