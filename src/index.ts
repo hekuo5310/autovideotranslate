@@ -26,7 +26,9 @@ async function handleProjectMedia(request: Request, env: Env, url: URL): Promise
   const headers = new Headers(); object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag); headers.set("accept-ranges", "bytes"); headers.set("cache-control", "private, max-age=60");
   if (object.range) {
-    const range = object.range; const offset = "offset" in range ? range.offset : 0; const length = "length" in range ? range.length : object.size;
+    const range = object.range;
+    const offset = ("offset" in range ? range.offset : 0) ?? 0;
+    const length = ("length" in range ? range.length : object.size) ?? object.size;
     headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`); headers.set("content-length", String(length));
     return new Response(object.body, { status: 206, headers });
   }
@@ -197,7 +199,13 @@ async function handleInternalMedia(request: Request, env: Env, url: URL): Promis
   if (request.method === "GET") {
     const object = await env.MEDIA.get(key, { range: request.headers }); if (!object) return new Response("Not found", { status: 404 });
     const headers = new Headers(); object.writeHttpMetadata(headers); headers.set("etag", object.httpEtag); headers.set("accept-ranges", "bytes");
-    if (object.range) { const r = object.range, offset = "offset" in r ? r.offset : 0, length = "length" in r ? r.length : object.size; headers.set("content-range", `bytes ${offset}-${offset+length-1}/${object.size}`); headers.set("content-length", String(length)); return new Response(object.body, { status:206, headers }); }
+    if (object.range) {
+      const r = object.range;
+      const offset = ("offset" in r ? r.offset : 0) ?? 0;
+      const length = ("length" in r ? r.length : object.size) ?? object.size;
+      headers.set("content-range", `bytes ${offset}-${offset+length-1}/${object.size}`); headers.set("content-length", String(length));
+      return new Response(object.body, { status:206, headers });
+    }
     headers.set("content-length", String(object.size)); return new Response(object.body, { headers });
   }
   if (request.method === "PUT") {
