@@ -19,6 +19,8 @@ export interface ProjectRuntimeState {
 
 export type PipelineMessage =
   | { type: "probe"; projectId: string; sourceKey: string }
+  | { type: "process"; projectId: string; sourceKey: string }
+  | { type: "tts"; projectId: string; voice?: string }
   | {
       type: "render";
       projectId: string;
@@ -26,6 +28,7 @@ export type PipelineMessage =
       outputKey: string;
       subtitleKey?: string;
       dubAudioKey?: string;
+      dubManifestKey?: string;
     };
 
 export interface Env {
