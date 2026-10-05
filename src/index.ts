@@ -170,6 +170,42 @@ async function handleProjectApi(request: Request, env: Env, url: URL): Promise<R
     if (!project?.source_key) return json({ error: "Project has no source video" }, 409);
 
     const outputKey = `projects/${projectId}/output/final.mp4`;
+
+    if (!body.subtitleKey && !body.dubAudioKey) {
+      await env.DB.prepare("UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?")
+        .bind("RENDERING", Date.now(), projectId).run();
+
+      try {
+        const source = await env.MEDIA.get(project.source_key);
+        if (!source) {
+          await env.DB.prepare("UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?")
+            .bind("FAILED", Date.now(), projectId).run();
+          return json({ error: "Source media is missing from R2" }, 404);
+        }
+
+        const output = await env.MEDIA.put(outputKey, source.body, {
+          httpMetadata: source.httpMetadata,
+          customMetadata: { projectId, renderMode: "r2-stream-copy" },
+        });
+
+        await env.DB.prepare(
+          "UPDATE projects SET stage = ?, output_key = ?, updated_at = ? WHERE id = ?",
+        ).bind("WAITING_FINAL_REVIEW", outputKey, Date.now(), projectId).run();
+
+        return json({
+          ok: true,
+          stage: "WAITING_FINAL_REVIEW",
+          outputKey,
+          bytes: output.size,
+          mode: "r2-stream-copy",
+        }, 201);
+      } catch (error) {
+        await env.DB.prepare("UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?")
+          .bind("FAILED", Date.now(), projectId).run();
+        throw error;
+      }
+    }
+
     await env.DB.prepare("UPDATE projects SET stage = ?, updated_at = ? WHERE id = ?")
       .bind("RENDER_QUEUED", Date.now(), projectId).run();
 
